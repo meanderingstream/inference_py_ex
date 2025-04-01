@@ -1,0 +1,189 @@
+# SmolLVM2 Example
+
+```elixir
+Mix.install([
+  {:inference_py_ex, git: "https://github.com/meanderingstream/inference_py_ex.git"},
+])
+```
+
+## Background
+
+This notebook is an initial example of using the inference_py_ex library to perform inference on a Hugging Face (HF) hosted multimodal model, SmolVLM2.  Among other goals, InferencePyEx will try to provide an Elixir developer friendly API around HF Hub libraries that aren't in Bumblebee.
+
+The library is just getting started and is expected to change significantly.  At this time, there aren't very many examples of how to run a PyTorch model from Elixir using the pythonx library.  A significant goal of this notebook is to provide a example that can be reviewed and discussed.  If you have suggestions on different approaches, we'd love to hear your feedback.
+
+**Limitations:** Pythonx directly uses the CPython library and has the limitations of Python.  Users of this library need to handle Python's Global Interpreter Lock constraints.  Pythonx authors suggest wrapping pythonx code in GenServer to make sure that only one function call is executing at a time.  At this time, this library doesn't provide an example using a Genserver approach.  However, a non-branching LiveBook notebook is also single threaded through the notebook cell dependencies.
+
+InferencePyEx was built in a LiveBook notebook and then pulled out into an Elixir library.  We'll be using the Github repository of the library as a mix dependency.
+
+## Quick start example
+
+```elixir
+alias InferencePyEx.HfTransformers.MultiModal
+```
+
+**Identifying the Hugging Face Hub hosted library you want to use**
+
+The following cell has a selection of three SmolVLM2 models that you can use.  You might want to start with the smallest model first.  All three version have been successfully tested on a Linux system with an 11GB Nvidia 3080 GPU, using CUDA.
+
+```elixir
+model_path_256m =  "HuggingFaceTB/SmolVLM2-256M-Video-Instruct"
+model_name_256m = "smolvlm2_256m_model"
+
+model_path_500m =  "HuggingFaceTB/SmolVLM2-500M-Video-Instruct"
+model_name_500m = "smolvlm2_500m_model"
+
+model_path_2_2b = "HuggingFaceTB/SmolVLM2-2.2B-Instruct"
+model_name_2_2b = "smolvlm2__2_2b_model"
+
+current_model_path = model_path_256m
+current_model_name = model_name_256m
+multi_modal = 
+  MultiModal.load_model(MultiModal.new(), current_model_path, 
+    "AutoModelForImageTextToText", current_model_name)
+```
+
+If the above cell executed successfully, several things have happened.
+
+1. A module struct was created holding some processing state that makes it easier for the Elixir developer to focus on the high level model behavior.
+
+2. The pythonx uv_init method was called with the python libraries required at the latest commit date on the GitHub repository.
+
+3. The Hugging Face AutoModelForImageTextToText library has downloaded the model weights.
+
+4. The model weights are loaded in the Python global variable space and named by the value of the current_model_name, smolvlm2_256m_model.
+
+5. The MultiModal struct variable was named multi_modal.  multi_modal will be passed as the first argument to any of the MultiModal functions.
+
+If the cell did not execute successfully for you, please let me know by creating a Github issue or reaching out using one of the locations on the contact tab of https://AlongTheAxon.com.
+
+## Prompt the model and check its response
+
+## Prompt an Image from URL
+
+Provide a URL for an image accessible from where your LiveBook is running. The image could be on your private network, if LiveBook is running on a private network.  Or they can be on the web.  This notebook provides an example from the SmolLVM2 model card.
+
+```elixir
+image_url = "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/bee.jpg"
+```
+
+**Prompt optimization**
+Try different prompts to see if you get different responses.  Also, if you can run the larger models, how does the response change between the sizes of the model.
+
+```elixir
+user_prompt = "Can you describe this image in one sentence?"
+```
+
+The max_response_tokens limits the number of tokens used in the inference response.  For a short question, a small maximum
+
+```elixir
+max_response_tokens = 64
+```
+
+```elixir
+{chat_response, multi_modal} = 
+  MultiModal.prompt_image_from_url(multi_modal, 
+    image_url, user_prompt, max_response_tokens, current_model_name)
+
+chat_response
+```
+
+For the example image, the response should look like:
+
+"User:\n\n\n\nCan you describe this image in one sentence?\nAssistant: A bee is on a flower, and it is in the center of the image."
+
+## Prompt an image on a local directory
+
+LiveBook can access files you add to the Files folder.  On your left side, you should see a folder icon.  Use the LiveBook capabilities to upload or Add file to your notebook context.
+
+The following cell is commented out because I couldn't provide an example that can be run directly without user interactions.  Once you've added a file that you want to prompt, uncomment the cell and execute it.
+
+```elixir
+files_dir = __DIR__ <> "/files/"
+image_name = "bee.jpg"
+image_path = files_dir <> image_name
+
+# {chat_response, multi_modal} = 
+#   MultiModal.prompt_image_from_path(multi_modal, 
+#     image_path,
+#     user_prompt, max_response_tokens, current_model_name)
+
+# chat_response
+```
+
+Hopefully you were able to demonstrate running model inference on a local file.
+
+## Prompt a base64 encoded image
+
+On a server, running inference that requires saving the uploaded image to disk isn't a very secure approach.  Generally, we want to run inference against an image to make sure that the image is consistent with the business goals of the application.
+
+Web servers use base64 encoding to send the image to the server over http(s).  We need the ability to process the image in memory.
+
+This was actually a fairly difficult challenge to resolve.  It wasn't a difficult technical problem, the "documentation" and model card description indicated that base64 encoding was supported.  The problem is how to specify the encoding in a way generate() method expected.  The solution was in the unit tests of the Transformers library.  Under the hood, the prompt_base64_image function uses a url indicating the base64 encoding.   InferencePyEx handles that detail for the developer.
+
+In a LiveBook notebook, we can base64 encode the same local image from the previous cell.  Read the file in and base64 encode the file contents.  Pass the encoded string into the prompt_base64_image function.  Be sure to note the mime type of the image you are passing to the python code. The code needs to know how to decode the string and convert the binary into an image type, PNG vs JPEG, etc.
+
+```elixir
+files_dir = __DIR__ <> "/files/"
+image_name = "bee.jpg"
+image_path = files_dir <> image_name
+# base64_image = 
+#   File.read!(image_path)
+#   |> Base.encode64()
+# mime_type = "image/jpeg"
+
+# {chat_response, multi_modal} = 
+#   MultiModal.prompt_base64_image(multi_modal, 
+#     base64_image, mime_type,
+#     "Can you describe this image in one sentence?", 64, current_model_name)
+
+# chat_response
+```
+
+## More details
+
+If you followed along this far, thank you.  You may have some questions about code design decisions.  The following are some key decisions that are in the library code.
+
+<!-- livebook:{"break_markdown":true} -->
+
+**Why identify a model name**
+
+The model name is in the Python global name space.  If more than one model can fit on your GPU, we need to have different names.  On my GPU, I can fit 2 of the three models on the GPU at a time.  When performing an evaluation of how the models respond to different prompts, I can change the prompt_* function call and keep the models in memory.  Prompt optimization requires comparing the response to different evaluation images.
+
+<!-- livebook:{"break_markdown":true} -->
+
+**How do I swap models out?**
+
+The library has a function to unload a model.  Calling this function will remove the name from the global's Map.  You can follow the unload with another load_model function call, if needed.
+
+<!-- livebook:{"force_markdown":true} -->
+
+```elixir
+def unload_model(%__MODULE__{}=m, model_name\\"model") do
+```
+
+<!-- livebook:{"break_markdown":true} -->
+
+**Why are you using Eex instead of parameters like Pythonx documentation shows?**
+
+At the time of initial development, that was the only way I thought would allow creating python variable names dynamically.  I'm open to bettter suggestions.
+
+<!-- livebook:{"break_markdown":true} -->
+
+**Why didn't you do yyyy?**
+
+I rushed to get something out that will help other Elixir developers pull in Hugging Face PyTorch models into an Elixir application.  My idea was to get something that worked reasonably well, in a short timeframe, to allow the community to iterate into a better approach.
+
+There are some items I'm not excited about the code I wrote.  With Pythonx and Hugging Face Hub, we have a ginormous number of models that we can now access directly in our code.
+
+The latest quantizatized models should be accessible.  Under the Transformers hood, the Accelerate library supports something like 18 different accelerators.  Some of those accellerators require special libraries in addition to Transformer libraries.  Do you have an Nvidia GPU on a Windows box, think gaming PC anybody?  This notebook *should* run on a Windows computer.
+
+The Accelerate library allows running models that are bigger than the GPU VRAM that you have.  The AutoModel capabilities enable running bigger models, sometimes *VERY SLOWLY*, on your computers.
+
+I'm not excited about how InferencePyEx interacts with the uv_init.  We need to allow an adaption technique to hold python model version configuration to a calling program's version control needs.  Also, we need a technique for those custom libraries for different accelerators.
+
+The Transformers generate function call can be broken down further and some code moved into Elixir.  I'm definitely not excited about having a Python Pillow library dependency.  We have libraries in Elixir that can help there.
+
+Opening up the interoperability probably needs to head toward something like passing tensors between languages.  We have SafeTensors, but I remember a Slack discussion identifying the constrained interoperability between the two languages.  We'll see.  I would love to get closer to calculating the model inputs in Elixir and passing the tensor to the lowest level AutoModel function call to run inference in PyTorch.
+
+I think that AutoModel is important for developers and small GPU "poor" businesses.  The adaptability of AutoModel is a strength of the Hugging Face library ecosystem.
